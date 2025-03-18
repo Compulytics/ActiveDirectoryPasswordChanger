@@ -313,6 +313,33 @@ function Main(){#Function for resetting Active Directory user passwords for sele
 			$ADUserData = TableSelection $ADUserData #Set the new value of the array containing the Active Directory user objects equal to the returned value from the TableSelection function, passing it the current array containing the Active Directory user objects.
 		}#End if
 	}#End if
+	$Verbose = $False #Initialize the variable for verbose logging.
+	$VerboseReply = Read-Host "Enable verbose change logging? (y,n)"#Prompt user to enable verbose logging.
+	if ($VerboseReply -eq 'y' -or $VerboseReply -eq 'Y'){#If the user replies that they want to enable verbose logging...
+		$Verbose = $True #Set the variable for verbose logging to True.
+		$CurrentDate = (Get-Date).ToUniversalTime().ToString("MMddyyyy")#Get the current date in MonthDayYear format.
+		$VerboseLogfileName = "ADPWCH-VERBLOG-$CurrentDate.txt"#Initialize the variable for the filename of the verbose log.
+		Try{#Try to read and write to the location for the verbose log.
+			if (!(Test-Path "$PSScriptRoot\$VerboseLogfileName")){#If the filename set for the verbose log is not already in use...
+				Add-Content -Path "$PSScriptRoot\$VerboseLogfileName" "######START VERBOSE LOG FOR ADPWCH.ps1######"#Write the header to the verbose log.
+			}#End if
+			else{#If the filename set for the verbose log is already in use...
+				$VerbLogOverwriteReply = Read-Host "File $PSScriptRoot\$VerboseLogfileName already exists, overwrite? (y,n)"#Prompt the user to overwrite the file currently using the filename set for the verbose log.
+				if ($VerbLogOverwriteReply -eq 'y' -or $VerbLogOverwriteReply -eq 'Y'){#If the user replies that they do want to overwrite the existing file...
+					Remove-Item -Path "$PSScriptRoot\$VerboseLogfileName"#Delete the existing file that is using the filename set for the verbose log.
+					Add-Content -Path "$PSScriptRoot\$VerboseLogfileName" "######START VERBOSE LOG FOR ADPWCH.ps1######"#Write the header to the verbose log.
+				}#End if
+				else{#If the user replies that they do not want to overwrite the file currently using the filename set for the verbose log.
+					Write-Host "Execution cancelled by user."#Print a line explaining that the script execution was cancelled by the user.
+					exit #Stop execution.
+				}#End else
+			}#End else
+		}#End try
+		Catch{#If an error is raised during the verbose file read/write operation...
+			Write-Host "ERROR: Failed to enable verbose log, check permissions in $PSScriptRoot"#Print a line explaining that there was an error creating the verbose log file in the script directory.
+			exit #Stop execution.
+		}#End catch
+	}#End if
 	$InputMinPWDate = Read-Host "Enter the earliest date acceptable for last password change (YYYY-MM-DD)"#Get a date from the user to use as the earliest acceptable last change date for user passwords.
 	Try{#Try to convert the users input into a date.
 		$MinLastChangeDate = [datetime]::Parse($InputMinPWDate)#Parse the user provided date into a standard date format.
@@ -361,6 +388,12 @@ function Main(){#Function for resetting Active Directory user passwords for sele
 	Write-Host "================================================================================"#Print UI border.
 	Write-Host "CSV Path: $InputCSV"#Print the path of the file that the user provided to be used as the source of Active Directory users.
 	Write-Host "Oldest Acceptable Password Date: $MinLastChangeDate"#Print the date that the user provided to be used as the earliest acceptable last change date for user passwords.
+	if ($Verbose){#If verbose logging is enabled...
+		Write-Host "Verbose change logging enabled: True"#Print a line showing that verbose logging is enabled.
+	}#End if
+	else{#If verbose logging is not enabled...
+		Write-Host "Verbose change logging enabled: False"#Print a line showing that verbose logging is disabled.
+	}#End else
 	if ($WriteEnabled){#If the user responded that they DO want to enable changes to Active Directory...
 		if ($InputPWLength -eq "R"){#If the user chose to use a range for the length of the new user passwords...
 			Write-Host "New Password Minimum Length: $PWLenMin"#Print a line showing the minimum desired password length.
@@ -404,9 +437,21 @@ function Main(){#Function for resetting Active Directory user passwords for sele
 						if ($CurrentADUser.PasswordLastSet -lt $MinLastChangeDate) {#If the users last password change date is before the given earliest acceptable last change date for user passwords...
 							if ($WriteEnabled){#If the user previously responded that they DO want to write changes to Active Directory...
 								$NewPassword = $(GeneratePassword $PWLenMin $PWLenMax) #Call the function named "GeneratePassword" and pass the minimum and maximum desired length for the new password, set the returned value as the value of the variable $NewPassword which will be used as the current users new password.
-								Set-ADAccountPassword -Identity $ADUserObject.AccountName -NewPassword (ConvertTo-SecureString -AsPlainText $NewPassword -Force)#Set the current Active Directory user's password to the new password we generated.
-								Write-Host "The password for account `"$($ADUserObject.AccountName)`" has been reset."#Print a confirmation that the current Active Directory user password has been updated.
-								$CurrentUserModified = "True"#Set the variable that we are using to keep track of if we changed the user password to "True".
+								Try{#Try to set the new user password on Active Directory.
+									Set-ADAccountPassword -Identity $ADUserObject.AccountName -NewPassword (ConvertTo-SecureString -AsPlainText $NewPassword -Force)#Set the current Active Directory user's password to the new password we generated.
+									$TimeOfChange = (Get-Date).ToUniversalTime().ToString("MMddyyyyTHHmmssZ")#Get the current time and date in MonthDayYearHourMinuteSecond format.
+									if ($Verbose){#If verbose logging is enabled...
+										$LogLine = $ADUserObject.AccountName #Initialize a variable to contain the log line and set it equal to the acocunt name of the current user.
+										$LogLine = "User $LogLine password updated to $NewPassword at $TimeOfChange"#Craft the rest of the verbose log entry line.
+										Add-Content -Path "$PSScriptRoot\$VerboseLogfileName" $LogLine #Write the verbose log line to the verbose log.
+									}#End if
+									Write-Host "The password for account `"$($ADUserObject.AccountName)`" has been reset."#Print a confirmation that the current Active Directory user password has been updated.
+									$CurrentUserModified = "True"#Set the variable that we are using to keep track of if we changed the user password to "True".
+								}#End try
+								Catch{#If an error is raised during the password reset operation for the current user.
+									Write-Host "ERROR: Failed to set password '$NewPassword' for account $($ADUserObject.AccountName)"#Print a line explaining that the password reset operation failed.
+									exit #Stop execution.
+								}#End catch
 							}#End if
 							else{#If the user previously responded that they DO NOT want to write changes to Active Directory...
 								Write-Host "The password for account `"$($ADUserObject.AccountName)`" would have been reset."#Print a confirmation that the current user's password would have been updated if write to Active Directoy was enabled.
